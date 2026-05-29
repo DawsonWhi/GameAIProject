@@ -234,6 +234,40 @@ class GoBoard:
                 stone = self.board[row_idx][col_idx]
                 row.append(str(stone) if stone else ".")
             print(" ".join(row))
+    
+    def get_game_result(self) -> tuple:
+        """Compute game result and return (winner, score_diff).
+        
+        Returns:
+            Tuple of (winner_color, score_difference) where:
+            - winner_color: 'b' or 'w' or 'tie'
+            - score_difference: abs(black_score - white_score)
+        """
+        result_str = compute_game_result(self)
+        
+        # This should be impossible with our scoring function. If you're seeing ties in scoring something needs to change
+        if "Tie" in str(result_str):
+            return ("tie", 0.0)
+        
+        result_str = str(result_str)
+        if "+" in result_str:
+            parts = result_str.split("+")
+            winner_color = parts[0].lower()
+            score_diff = float(parts[1]) if len(parts) > 1 else 0.0
+            return (winner_color, score_diff)
+        
+        return ("tie", 0.0)
+
+
+def compute_reward(game_result: tuple, player_color: str) -> float:
+    winner_color, score_diff = game_result
+    
+    if winner_color == "tie":
+        return 0.0
+    elif winner_color == player_color:
+        return 1.0
+    else:
+        return -1.0
 
 
 
