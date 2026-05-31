@@ -131,6 +131,7 @@ class GoBoard:
             captured_pos = next(iter(captured_groups[0].stones)).position
             if self.previous_state and self.previous_state == (captured_pos, color):
                 # Ko violation - undo the move
+                # This can also get AI stuck in an infinite loop
                 self._remove_group(new_group)
                 self.board[position.x][position.y] = None
                 self._grid.pop(position, None)
@@ -260,7 +261,7 @@ class GoBoard:
 
 
 def compute_reward(game_result: tuple, player_color: str) -> float:
-    winner_color, score_diff = game_result
+    winner_color = game_result
     
     if winner_color == "tie":
         return 0.0

@@ -1,7 +1,7 @@
 from environment import *
 from players import Player, PlayerInfo
 from scoring import compute_game_result
-from agent import MoveAction, RandomAgent
+from agent import MoveAction, RandomAgent, TDAgent
 from collections import namedtuple
 
 
@@ -20,7 +20,7 @@ class Game:
             row = move[index+1]
             col = move[index+2]
             if char == "[" and row.islower() and row.isalpha() and col.islower() and col.isalpha():
-                return Position(ord(row)-97, ord(col)-97)
+                return Position(ord(col)-97, ord(row)-97)
 
                 
 
@@ -31,7 +31,7 @@ class Game:
         - 'pass' to pass
         """
         while True:
-            user_input = input(f"Enter move as 'row,col' (place) or 'move row1,col1 to row2,col2' or 'pass': ")
+            user_input = input(f"Enter move as 'row, col' (place) or 'move row1,col1 to row2,col2' or 'pass': ")
             user_input = user_input.strip().lower()
             
             if user_input == "pass":
@@ -40,7 +40,6 @@ class Game:
             # Handle move command
             if user_input.startswith("move "):
                 try:
-                    # Parse "move row1,col1 to row2,col2"
                     parts = user_input[5:].split(" to ")
                     if len(parts) != 2:
                         print("Invalid format. Use: move row1,col1 to row2,col2")
@@ -49,13 +48,13 @@ class Game:
                     start_parts = parts[0].strip().split(",")
                     end_parts = parts[1].strip().split(",")
                     
-                    start_row, start_col = int(start_parts[0]) - 1, int(start_parts[1]) - 1
-                    end_row, end_col = int(end_parts[0]) - 1, int(end_parts[1]) - 1
+                    start_x, start_y = int(start_parts[0]) - 1, int(start_parts[1]) - 1
+                    end_x, end_y = int(end_parts[0]) - 1, int(end_parts[1]) - 1
                     
-                    if all(0 <= pos < boardsize for pos in [start_row, start_col, end_row, end_col]):
-                        return MoveAction("move", 
-                                        Position(start_row, start_col), 
-                                        Position(end_row, end_col))
+                    if all(0 <= pos < boardsize for pos in [start_x, start_y, end_x, end_y]):
+                        return MoveAction("move",
+                                        Position(start_x, start_y),
+                                        Position(end_x, end_y))
                     else:
                         print(f"Both coordinates must be between 1 and {boardsize}.")
                 except (ValueError, IndexError):
@@ -63,22 +62,24 @@ class Game:
             else:
                 # Handle place command
                 try:
-                    row_str, col_str = user_input.split(",")
-                    row, col = int(row_str) - 1, int(col_str) - 1
-                    if 0 <= row < boardsize and 0 <= col < boardsize:
-                        return MoveAction("place", Position(row, col))
+                    x_str, y_str = user_input.split(",")
+                    x, y = int(x_str) - 1, int(y_str) - 1
+                    if 0 <= x < boardsize and 0 <= y < boardsize:
+                        return MoveAction("place", Position(x, y))
                     else:
                         print(f"Both numbers must be between 1 and {boardsize}.")
                 except ValueError:
                     print("Invalid format. Use 'row,col' or 'move row1,col1 to row2,col2'.")
 
-    def play_game(self, player1, player2, BOARDSIZE=19):
+    def play_game(self, player1, player2, BOARDSIZE=19, ai_agent: TDAgent = None):
         board = GoBoard(BOARDSIZE)
         current_player = player1
         game_over = False
         valid_move = False
         pass_flag = 0
-        prev_move = None
+        if ai_agent is None:
+            ai_agent = TDAgent()
+            ai_agent.load("values_white.json")  # or whichever file
 
         while not (game_over or pass_flag == 2):  # Game continues until two consecutive passes
 
@@ -107,8 +108,8 @@ class Game:
                         else:
                             print("Invalid move. Piece must be yours, destination empty, and move cardinal (1 step up/down/left/right). Try again.")
                 else:
-                    # AI player makes a random move
-                    action = RandomAgent.get_random_move(board, current_player.color)
+                    # AI player uses learned values
+                    action = ai_agent.get_learned_move(board, current_player.color, epsilon=0.0)
                     print(f"{current_player.name} (AI) chose: {action.action_type}")
                     
                     if action.action_type == "pass":
@@ -120,11 +121,15 @@ class Game:
                         if valid_move:
                             prev_move = ("place", action.end_pos)
                             pass_flag = 0
+                        else:
+                            print("Invalid placement. Try again.")
                     elif action.action_type == "move":
                         valid_move = board.move_stone(action.start_pos, action.end_pos, current_player.color)
                         if valid_move:
                             prev_move = ("move", action.start_pos, action.end_pos)
                             pass_flag = 0
+            else:
+                print("Invalid move.")
 
             if current_player == player1:
                 current_player = player2
@@ -162,7 +167,8 @@ def get_game_mode() -> tuple:
             p1 = PlayerInfo(Player.black, name="Player 1 (Black)", is_human=True)
             p2 = PlayerInfo(Player.white, name="Player 2 (White)", is_human=True)
             return p1, p2
-        elif choice == "2":
+        elif choice == "2": # Bug found if AI Tries to make an invalid move it will just keep trying to make the same invalid move and get stuck in an infinite loop. This is because the AI doesn't have any logic to handle invalid moves, it just keeps trying to make the same move until it succeeds which it never will. We can make AI make a random move after it fails to make a move 3 times in a row to get around this issue.
+            # Ideally AI should not be able to make invalid moves in the first place but this is a quick fix to prevent the game from getting stuck. 
             p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
             p2 = PlayerInfo(Player.white, name="AI (White)", is_human=False)
             return p1, p2
@@ -175,6 +181,8 @@ def get_game_mode() -> tuple:
 
 
 if __name__ == "__main__":
+    agent = TDAgent()
+    agent.load("values_black.json")  # Load pre-trained values for AI player
     board_size = get_board_size()
     player1, player2 = get_game_mode()
     test_game = Game()
