@@ -25,13 +25,15 @@ class PlayerInfo:
         color: single-char color used by the board ('b' or 'w')
         name: display name
         is_human: whether this player is human-controlled
+        agent_type: type of AI agent ("td", "mcts", "greedy", or None for human)
     """
 
-    def __init__(self, color_enum: Player, name: Optional[str] = None, is_human: bool = True):
+    def __init__(self, color_enum: Player, name: Optional[str] = None, is_human: bool = True, agent_type: Optional[str] = None):
         self.color_enum = color_enum
         self.color = color_enum.color
         self.name = name or ("Black" if color_enum == Player.black else "White")
         self.is_human = is_human
+        self.agent_type = agent_type
 
     def set_human_or_ai(self, is_human: bool):
         self.is_human = is_human

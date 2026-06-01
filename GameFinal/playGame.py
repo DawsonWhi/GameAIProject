@@ -1,7 +1,7 @@
 from environment import *
 from players import Player, PlayerInfo
 from scoring import compute_game_result
-from agent import MoveAction, RandomAgent, TDAgent
+from agent import MoveAction, RandomAgent, TDAgent, GreedyTerritoryAgent, MCTSAgent
 from collections import namedtuple
 
 
@@ -71,7 +71,24 @@ class Game:
                 except ValueError:
                     print("Invalid format. Use 'row,col' or 'move row1,col1 to row2,col2'.")
 
-    def play_game(self, player1, player2, BOARDSIZE=19, ai_agent: TDAgent = None):
+    def should_ai_pass(self, board: GoBoard, color: str, losing_threshold: float = 20.0) -> bool:
+        try:
+            result = compute_game_result(board)
+            
+            if color == 'b':
+                player_score = result.b
+                opponent_score = result.w + result.komi
+            else:
+                player_score = result.w + result.komi
+                opponent_score = result.b
+            
+            # If losing by more than threshold, should pass
+            return (opponent_score - player_score) > losing_threshold
+        except Exception:
+            # If scoring fails for any reason, don't pass
+            return False
+
+    def play_game(self, player1, player2, BOARDSIZE=19, ai_agent: TDAgent = None, mcts_agent: MCTSAgent = None, greedy_agent = None):
         board = GoBoard(BOARDSIZE)
         current_player = player1
         game_over = False
@@ -79,7 +96,11 @@ class Game:
         pass_flag = 0
         if ai_agent is None:
             ai_agent = TDAgent()
-            ai_agent.load("values_white.json")  # or whichever file
+            ai_agent.load("values_black.msgpack.gz")
+        if mcts_agent is None:
+            mcts_agent = MCTSAgent(iterations=50)
+        if greedy_agent is None:
+            greedy_agent = GreedyTerritoryAgent()
 
         while not (game_over or pass_flag == 2):  # Game continues until two consecutive passes
 
@@ -108,28 +129,49 @@ class Game:
                         else:
                             print("Invalid move. Piece must be yours, destination empty, and move cardinal (1 step up/down/left/right). Try again.")
                 else:
-                    # AI player uses learned values
-                    action = ai_agent.get_learned_move(board, current_player.color, epsilon=0.0)
-                    print(f"{current_player.name} (AI) chose: {action.action_type}")
+                    # AI players - select agent based on agent_type
+                    action = None
+                    
+                    # Check if AI should pass because they're losing
+                    if self.should_ai_pass(board, current_player.color):
+                        print(f"{current_player.name} is losing significantly, chooses to pass.")
+                        action = MoveAction("pass")
+                    elif current_player.agent_type == "td":
+                        action = ai_agent.get_learned_move(board, current_player.color, epsilon=0.0)
+                    elif current_player.agent_type == "mcts":
+                        action = mcts_agent.get_best_move(board, current_player.color)
+                    elif current_player.agent_type == "greedy":
+                        action = greedy_agent.get_greedy_move(board, current_player.color)
+                    else:
+                        # Default to pass if agent type not recognized
+                        action = MoveAction("pass")
+                    
+                    print(f"{current_player.name} chose: {action.action_type}")
                     
                     if action.action_type == "pass":
                         print(f"{current_player.name} passes.")
                         valid_move = True
                         pass_flag += 1
                     elif action.action_type == "place":
-                        valid_move = board.place_stone(action.end_pos, current_player.color)
-                        if valid_move:
+                        if board.place_stone(action.end_pos, current_player.color):
+                            valid_move = True
                             prev_move = ("place", action.end_pos)
                             pass_flag = 0
                         else:
-                            print("Invalid placement. Try again.")
+                            # Invalid move, fallback to pass
+                            print(f"Invalid placement, {current_player.name} passes instead.")
+                            valid_move = True
+                            pass_flag += 1
                     elif action.action_type == "move":
-                        valid_move = board.move_stone(action.start_pos, action.end_pos, current_player.color)
-                        if valid_move:
+                        if board.move_stone(action.start_pos, action.end_pos, current_player.color):
+                            valid_move = True
                             prev_move = ("move", action.start_pos, action.end_pos)
                             pass_flag = 0
-            else:
-                print("Invalid move.")
+                        else:
+                            # Invalid move, fallback to pass
+                            print(f"Invalid move, {current_player.name} passes instead.")
+                            valid_move = True
+                            pass_flag += 1
 
             if current_player == player1:
                 current_player = player2
@@ -157,33 +199,49 @@ def get_game_mode() -> tuple:
     """Prompt user to select game mode and return (player1, player2) tuple."""
     print("\nGame Mode Selection:")
     print("1. Human vs Human")
-    print("2. Human vs AI")
-    print("3. AI vs AI")
+    print("2. Human vs TD Agent")
+    print("3. Human vs MCTS")
+    print("4. Human vs Greedy")
+    print("5. TD Agent vs MCTS")
+    print("6. Greedy vs MCTS")
     
     while True:
-        choice = input("Select mode (1-3): ").strip()
+        choice = input("Select mode (1-6): ").strip()
         
         if choice == "1":
             p1 = PlayerInfo(Player.black, name="Player 1 (Black)", is_human=True)
             p2 = PlayerInfo(Player.white, name="Player 2 (White)", is_human=True)
             return p1, p2
-        elif choice == "2": # Bug found if AI Tries to make an invalid move it will just keep trying to make the same invalid move and get stuck in an infinite loop. This is because the AI doesn't have any logic to handle invalid moves, it just keeps trying to make the same move until it succeeds which it never will. We can make AI make a random move after it fails to make a move 3 times in a row to get around this issue.
-            # Ideally AI should not be able to make invalid moves in the first place but this is a quick fix to prevent the game from getting stuck. 
+        elif choice == "2":
             p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
-            p2 = PlayerInfo(Player.white, name="AI (White)", is_human=False)
+            p2 = PlayerInfo(Player.white, name="TD Agent (White)", is_human=False, agent_type="td")
             return p1, p2
         elif choice == "3":
-            p1 = PlayerInfo(Player.black, name="AI 1 (Black)", is_human=False)
-            p2 = PlayerInfo(Player.white, name="AI 2 (White)", is_human=False)
+            p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
+            p2 = PlayerInfo(Player.white, name="MCTS (White)", is_human=False, agent_type="mcts")
+            return p1, p2
+        elif choice == "4":
+            p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
+            p2 = PlayerInfo(Player.white, name="Greedy (White)", is_human=False, agent_type="greedy")
+            return p1, p2
+        elif choice == "5":
+            p1 = PlayerInfo(Player.black, name="TD Agent (Black)", is_human=False, agent_type="td")
+            p2 = PlayerInfo(Player.white, name="MCTS (White)", is_human=False, agent_type="mcts")
+            return p1, p2
+        elif choice == "6":
+            p1 = PlayerInfo(Player.black, name="Greedy (Black)", is_human=False, agent_type="greedy")
+            p2 = PlayerInfo(Player.white, name="MCTS (White)", is_human=False, agent_type="mcts")
             return p1, p2
         else:
-            print("Invalid choice. Please enter 1, 2, or 3.")
+            print("Invalid choice. Please enter 1-6.")
 
 
 if __name__ == "__main__":
-    agent = TDAgent()
-    agent.load("values_black.json")  # Load pre-trained values for AI player
+    td_agent = TDAgent()
+    td_agent.load("values_black.msgpack.gz")  # Load pre-trained values for TD Agent
+    mcts_agent = MCTSAgent(iterations=50)  # Create MCTS agent
+    greedy_agent = GreedyTerritoryAgent()  # Create Greedy Territory agent
     board_size = get_board_size()
     player1, player2 = get_game_mode()
     test_game = Game()
-    test_game.play_game(player1, player2, BOARDSIZE=board_size)
+    test_game.play_game(player1, player2, BOARDSIZE=board_size, ai_agent=td_agent, mcts_agent=mcts_agent, greedy_agent=greedy_agent)

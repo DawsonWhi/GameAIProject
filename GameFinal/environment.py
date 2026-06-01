@@ -1,5 +1,5 @@
 from collections import namedtuple
-from typing import List, Optional, Set, Dict
+from typing import List, Optional
 from players import Player, Point
 from scoring import compute_game_result
 
@@ -212,18 +212,75 @@ class GoBoard:
         old_group = source_stone.group
         if old_group:
             old_group.remove_stone(source_stone)
-            if len(old_group) == 0:
+            if len(old_group.stones) == 0:
                 self._remove_group(old_group)
             else:
                 # Recalculate liberties for the remaining group
                 old_group.calculate_liberties(self)
         
-        # Place stone at destination
+        # Move stone position
         source_stone.position = to_pos
         self.board[from_pos.x][from_pos.y] = None
         self._grid.pop(from_pos, None)
         self.board[to_pos.x][to_pos.y] = source_stone
-        self._grid[to_pos] = old_group
+        
+        # Get adjacent groups at the new position
+        adjacent_groups = self._get_adjacent_groups(to_pos)
+        
+        # Merge with friendly groups
+        new_group = None
+        for group in adjacent_groups:
+            if group.color == color:
+                if new_group is None:
+                    new_group = group
+                    new_group.add_stone(source_stone)
+                else:
+                    # Merge with existing friendly group
+                    new_group.merge(group)
+                    if group in self.groups:
+                        self.groups.remove(group)
+        
+        # If no friendly groups adjacent, create a new group
+        if new_group is None:
+            new_group = StoneGroup(color)
+            new_group.add_stone(source_stone)
+            self.groups.append(new_group)
+        
+        self._grid[to_pos] = new_group
+        new_group.calculate_liberties(self)
+        
+        # Check for captures in opponent groups
+        captured_groups = []
+        for group in self._get_adjacent_groups(to_pos):
+            if group.color != color:
+                group.calculate_liberties(self)
+                if len(group.liberties) == 0:
+                    captured_groups.append(group)
+        
+        # Perform captures
+        for group in captured_groups:
+            self._remove_group(group)
+        
+        # Check if move is valid (not suicide unless capturing)
+        new_group.calculate_liberties(self)
+        if len(new_group.liberties) == 0 and not captured_groups:
+            # Suicide move - undo it
+            self.board[to_pos.x][to_pos.y] = None
+            self._grid.pop(to_pos, None)
+            self.board[from_pos.x][from_pos.y] = source_stone
+            self._grid[from_pos] = new_group
+            new_group.remove_stone(source_stone)
+            source_stone.position = from_pos
+            
+            # Restore old group
+            if old_group:
+                old_group.add_stone(source_stone)
+            else:
+                old_group = StoneGroup(color)
+                old_group.add_stone(source_stone)
+                self.groups.append(old_group)
+            old_group.calculate_liberties(self)
+            return False
         
         return True
 

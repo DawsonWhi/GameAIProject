@@ -1,9 +1,11 @@
 import random
 from environment import GoBoard, Position
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional
 import copy
 import math
-import json
+import msgpack
+import gzip
+import os
 
 class MoveAction:
     """Represents either a placement or a movement action."""
@@ -128,16 +130,27 @@ class TDAgent:
         return f"{board_str}_{color}"
     
     def save(self, filename: str):
-        import os
+        if filename.endswith('.json'):
+            filename = filename.replace('.json', '.msgpack.gz')
+        elif not filename.endswith('.msgpack.gz'):
+            filename = filename + '.msgpack.gz'
+        
         tmp = filename + ".tmp"
-        with open(tmp, 'w') as f:
-            json.dump(self.value_function, f)
+        packed_data = msgpack.packb(self.value_function)
+        with gzip.open(tmp, 'wb') as f:
+            f.write(packed_data)
         os.replace(tmp, filename)
 
     def load(self, path: str):
         try:
-            with open(path, "r") as f:
-                self.value_function = json.load(f)
+            # Convert .json paths to .msgpack.gz if needed
+            if path.endswith('.json'):
+                path = path.replace('.json', '.msgpack.gz')
+            elif not path.endswith('.msgpack.gz'):
+                path = path + '.msgpack.gz'
+            
+            with gzip.open(path, 'rb') as f:
+                self.value_function = msgpack.unpackb(f.read(), raw=False)
         except FileNotFoundError:
             pass  # Start fresh if no file exists
 
@@ -157,17 +170,7 @@ class TDAgent:
             self.eligibility_traces[state_id] *= self.gamma * self.lambda_trace
     
     def update_value(self, state_id: str, reward: float, next_state_id: Optional[str] = None, done: bool = False):
-        """Update value function using TD error.
-        
-        Updates all traces states with the TD error weighted by their eligibility.
-        This implements TD(lambda) algorithm.
-        
-        Args:
-            state_id: Current state ID
-            reward: Immediate reward received
-            next_state_id: Next state ID (None if terminal)
-            done: Whether episode is over
-        """
+
         # Calculate TD error (delta)
         current_value = self.get_value(state_id)
         next_value = 0.0 if done or next_state_id is None else self.get_value(next_state_id)
@@ -188,21 +191,7 @@ class TDAgent:
         self.decay_traces()
     
     def get_learned_move(self, board: GoBoard, color: str, epsilon: float = 0.1) -> MoveAction:
-        """Choose move using learned values (epsilon-greedy).
         
-        With probability epsilon, choose random move.
-        Otherwise, choose move leading to highest value next state.
-        Only considers moves that are valid according to Go rules.
-        When multiple moves tie for best value, randomly selects among them.
-        
-        Args:
-            board: Current game board
-            color: Player color
-            epsilon: Exploration rate (0=greedy, 1=random)
-            
-        Returns:
-            MoveAction chosen by the agent
-        """
         if random.random() < epsilon:
             return RandomAgent.get_random_move(board, color)
         
@@ -214,8 +203,6 @@ class TDAgent:
             for col in range(board.size):
                 pos = Position(row, col)
                 if board.get_stone(pos) is None:
-                    # Quick pre-check: if board is empty or move doesn't immediately violate, consider it
-                    # Full validation will happen during training when move is actually played
                     valid_moves.append(MoveAction("place", pos))
         
         # Find all valid move positions (pieces of this color that can move)
@@ -238,7 +225,7 @@ class TDAgent:
         for move in valid_moves:
             if move.action_type == "place":
                 next_state_id = self.get_hypothetical_state_id(board, move.end_pos, color, "place")
-            else:  # move
+            else:
                 next_state_id = self.get_hypothetical_state_id(board, move.end_pos, color, "move", from_pos=move.start_pos)
             
             value = self.get_value(next_state_id)
@@ -301,7 +288,6 @@ class GreedyTerritoryAgent:
         return best_move
 
     def evaluate_board(self, board: GoBoard, color: str) -> int:
-        """Score the full board state from the perspective of color."""
         opponent_color = 'w' if color == 'b' else 'b'
         score = 0
 
@@ -384,3 +370,214 @@ class GreedyTerritoryAgent:
     @staticmethod
     def _copy_board(board: GoBoard) -> GoBoard:
         return copy.deepcopy(board)
+
+
+class MCTSNode:
+    """Node in the MCTS tree."""
+    def __init__(self, board: GoBoard, color: str, parent=None, move=None):
+        self.board = copy.deepcopy(board)
+        self.color = color  # Color to move from this node
+        self.parent = parent
+        self.move = move  # Move that led to this node
+        self.children = []  # List of (move, child_node) tuples
+        self.untried_moves = self._get_all_moves()
+        self.visits = 0
+        self.value = 0.0
+    
+    def _get_all_moves(self):
+        """Get all legal moves from this position."""
+        moves = []
+        # Collect all placement and move actions
+        for row in range(self.board.size):
+            for col in range(self.board.size):
+                pos = Position(row, col)
+                if self.board.get_stone(pos) is None:
+                    moves.append(MoveAction("place", pos))
+        
+        for row in range(self.board.size):
+            for col in range(self.board.size):
+                pos = Position(row, col)
+                stone = self.board.get_stone(pos)
+                if stone and stone.color == self.color:
+                    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        new_row, new_col = row + dx, col + dy
+                        if 0 <= new_row < self.board.size and 0 <= new_col < self.board.size:
+                            new_pos = Position(new_row, new_col)
+                            if self.board.get_stone(new_pos) is None:
+                                moves.append(MoveAction("move", pos, new_pos))
+        
+        moves.append(MoveAction("pass"))
+        return moves
+    
+    def has_untried_moves(self):
+        """Check if there are untried moves."""
+        return len(self.untried_moves) > 0
+    
+    def expand(self):
+        """Expand by creating a child for a random untried move."""
+        if not self.has_untried_moves():
+            return None
+        
+        # Pick a random untried move and remove it
+        move = random.choice(self.untried_moves)
+        self.untried_moves.remove(move)
+        
+        new_board = copy.deepcopy(self.board)
+        next_color = 'w' if self.color == 'b' else 'b'
+        
+        # Apply move to board
+        if move.action_type == "place":
+            new_board.place_stone(move.end_pos, self.color)
+        elif move.action_type == "move":
+            new_board.move_stone(move.start_pos, move.end_pos, self.color)
+        
+        child = MCTSNode(new_board, next_color, parent=self, move=move)
+        self.children.append((move, child))
+        return child
+    
+    def uct_value(self, exploration_constant=1.414):
+        """Calculate UCT value for node selection."""
+        if self.visits == 0:
+            return float('inf')
+        exploitation = self.value / self.visits
+        exploration = math.sqrt(math.log(self.parent.visits) / self.visits) if self.parent.visits > 0 else 0
+        return exploitation + exploration_constant * exploration
+    
+    def select_best_child(self):
+        """Select child with highest UCT value."""
+        if not self.children:
+            return None
+        return max(self.children, key=lambda x: x[1].uct_value())[1]
+    
+    def best_move(self):
+        """Return move to child with most visits."""
+        if not self.children:
+            return MoveAction("pass")
+        move, child = max(self.children, key=lambda x: x[1].visits)
+        return move
+
+
+class MCTSAgent:
+    """Monte Carlo Tree Search agent for Go."""
+    
+    def __init__(self, iterations=100):
+        self.iterations = iterations
+    
+    def get_best_move(self, board: GoBoard, color: str) -> MoveAction:
+        """Find best move using MCTS."""
+        root = MCTSNode(board, color)
+        root_color = color  # Remember the root color for reward normalization
+        
+        for _ in range(self.iterations):
+            node = root
+            
+            # Selection & Expansion
+            while not node.has_untried_moves() and node.children:
+                node = node.select_best_child()
+            
+            # Expand if possible
+            if node.has_untried_moves():
+                child = node.expand()
+                if child:
+                    node = child
+            
+            # Simulation - evaluate from the root player's perspective
+            reward = self._simulate(node.board, node.color, root_color)
+            
+            # Backpropagation
+            while node is not None:
+                node.visits += 1
+                node.value += reward
+                node = node.parent
+        
+        return root.best_move()
+    
+    def _simulate(self, board: GoBoard, color: str, root_color: str, depth=0, max_depth=30) -> float:
+        """Simulate a random playout and evaluate from root player's perspective."""
+        if depth >= max_depth:
+            # Evaluate board position using territory heuristic
+            return self._evaluate_position(board, root_color)
+        
+        moves = []
+        for row in range(board.size):
+            for col in range(board.size):
+                pos = Position(row, col)
+                if board.get_stone(pos) is None:
+                    moves.append(MoveAction("place", pos))
+        
+        for row in range(board.size):
+            for col in range(board.size):
+                pos = Position(row, col)
+                stone = board.get_stone(pos)
+                if stone and stone.color == color:
+                    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        new_row, new_col = row + dx, col + dy
+                        if 0 <= new_row < board.size and 0 <= new_col < board.size:
+                            new_pos = Position(new_row, new_col)
+                            if board.get_stone(new_pos) is None:
+                                moves.append(MoveAction("move", pos, new_pos))
+        
+        if not moves:
+            # No moves available, evaluate current position
+            return self._evaluate_position(board, root_color)
+        
+        move = random.choice(moves)
+        board_copy = copy.deepcopy(board)
+        next_color = 'w' if color == 'b' else 'b'
+        
+        if move.action_type == "place":
+            board_copy.place_stone(move.end_pos, color)
+        elif move.action_type == "move":
+            board_copy.move_stone(move.start_pos, move.end_pos, color)
+        
+        return self._simulate(board_copy, next_color, root_color, depth + 1, max_depth)
+    
+    def _evaluate_position(self, board: GoBoard, player_color: str) -> float:
+        """Heuristically evaluate board position for the given player.
+        Returns value between 0 and 1, where 1 is winning and 0 is losing."""
+        opponent_color = 'w' if player_color == 'b' else 'b'
+        player_score = 0
+        opponent_score = 0
+        
+        for row in range(board.size):
+            for col in range(board.size):
+                pos = Position(row, col)
+                stone = board.get_stone(pos)
+                
+                if stone is None:
+                    # Empty intersection - territory
+                    neighbors = []
+                    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nx, ny = row + dx, col + dy
+                        if 0 <= nx < board.size and 0 <= ny < board.size:
+                            neighbor = board.get_stone(Position(nx, ny))
+                            if neighbor:
+                                neighbors.append(neighbor.color)
+                    
+                    if neighbors:
+                        if all(c == player_color for c in neighbors):
+                            player_score += 1.0
+                        elif all(c == opponent_color for c in neighbors):
+                            opponent_score += 1.0
+                
+                elif stone.color == player_color:
+                    # Our stones
+                    player_score += 2.0
+                    # Bonus for liberties if group exists
+                    if stone.group:
+                        stone.group.calculate_liberties(board)
+                        player_score += len(stone.group.liberties) * 0.5
+                
+                elif stone.color == opponent_color:
+                    # Opponent stones
+                    opponent_score += 2.0
+                    if stone.group:
+                        stone.group.calculate_liberties(board)
+                        opponent_score += len(stone.group.liberties) * 0.5
+        
+        total = player_score + opponent_score
+        if total == 0:
+            return 0.5
+        
+        # Normalize to [0, 1] where 0.5 is equal
+        return min(1.0, max(0.0, player_score / (total + 1.0)))

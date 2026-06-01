@@ -1,5 +1,5 @@
 from environment import GoBoard, compute_reward
-from agent import TDAgent, MoveAction
+from agent import TDAgent
 import time
 
 
@@ -51,8 +51,8 @@ def train(
     start_time = time.time()
     agent = TDAgent(learning_rate=0.1, gamma=0.99, lambda_trace=0.9)
     opponent = TDAgent(learning_rate=0.1, gamma=0.99, lambda_trace=0.9)
-    agent.load("values_black.json")
-    opponent.load("values_white.json")
+    agent.load("values_black.msgpack.gz")
+    opponent.load("values_white.msgpack.gz")
     
     # Draws really should be impossible. If you see any in the result something unexpected happened.
     wins, losses, draws = 0, 0, 0
@@ -77,11 +77,11 @@ def train(
                 f"Elapsed: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
             wins, losses, draws = 0, 0, 0
         if episode % save_every == 0:
-            agent.save("values_black.json")
-            opponent.save("values_white.json")
+            agent.save("values_black.msgpack.gz")
+            opponent.save("values_white.msgpack.gz")
             print(f"  → Checkpoint saved at episode {episode}")
-    agent.save("values_black.json")
-    opponent.save("values_white.json")
+    agent.save("values_black.msgpack.gz")
+    opponent.save("values_white.msgpack.gz")
     print("Training complete.")
 
 if __name__ == "__main__":
