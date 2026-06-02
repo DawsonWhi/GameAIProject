@@ -466,45 +466,62 @@ class MCTSAgent:
     def get_best_move(self, board: GoBoard, color: str) -> MoveAction:
         """Find best move using MCTS."""
         root = MCTSNode(board, color)
-        root_color = color  # Remember the root color for reward normalization
-        
+        root_color = color
+
         for _ in range(self.iterations):
             node = root
-            
-            # Selection & Expansion
+
+            # Selection
             while not node.has_untried_moves() and node.children:
                 node = node.select_best_child()
-            
-            # Expand if possible
+
+            # Expansion
             if node.has_untried_moves():
                 child = node.expand()
                 if child:
                     node = child
-            
-            # Simulation - evaluate from the root player's perspective
+
+            # Simulation
             reward = self._simulate(node.board, node.color, root_color)
-            
+
             # Backpropagation
             while node is not None:
                 node.visits += 1
                 node.value += reward
                 node = node.parent
-        
+
         return root.best_move()
-    
-    def _simulate(self, board: GoBoard, color: str, root_color: str, depth=0, max_depth=30) -> float:
-        """Simulate a random playout and evaluate from root player's perspective."""
-        if depth >= max_depth:
-            # Evaluate board position using territory heuristic
-            return self._evaluate_position(board, root_color)
-        
-        moves = []
+
+    def _get_moves(self, board: GoBoard, color: str) -> list:
+        """Get all valid moves, prioritizing captures and saves."""
+        urgent = []   # captures and saves — play these first
+        normal = []
+
+        opponent = 'w' if color == 'b' else 'b'
+
         for row in range(board.size):
             for col in range(board.size):
                 pos = Position(row, col)
                 if board.get_stone(pos) is None:
-                    moves.append(MoveAction("place", pos))
-        
+                    move = MoveAction("place", pos)
+                    # Check if this captures an opponent group in atari
+                    captures = False
+                    saves = False
+                    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nx, ny = row + dx, col + dy
+                        if 0 <= nx < board.size and 0 <= ny < board.size:
+                            neighbor = board.get_stone(Position(nx, ny))
+                            if neighbor and neighbor.group:
+                                neighbor.group.calculate_liberties(board)
+                                if neighbor.color == opponent and len(neighbor.group.liberties) == 1:
+                                    captures = True
+                                if neighbor.color == color and len(neighbor.group.liberties) == 1:
+                                    saves = True
+                    if captures or saves:
+                        urgent.append(move)
+                    else:
+                        normal.append(move)
+
         for row in range(board.size):
             for col in range(board.size):
                 pos = Position(row, col)
@@ -515,69 +532,86 @@ class MCTSAgent:
                         if 0 <= new_row < board.size and 0 <= new_col < board.size:
                             new_pos = Position(new_row, new_col)
                             if board.get_stone(new_pos) is None:
-                                moves.append(MoveAction("move", pos, new_pos))
-        
-        if not moves:
-            # No moves available, evaluate current position
+                                normal.append(MoveAction("move", pos, new_pos))
+
+        # Always play urgent moves if available, otherwise sample from normal
+        return urgent if urgent else normal
+
+    def _simulate(self, board: GoBoard, color: str, root_color: str, depth: int = 0, max_depth: int = 40) -> float:
+        """Simulate a semi-random playout with capture/save heuristics."""
+        if depth >= max_depth:
             return self._evaluate_position(board, root_color)
-        
+
+        moves = self._get_moves(board, color)
+
+        if not moves:
+            return self._evaluate_position(board, root_color)
+
         move = random.choice(moves)
         board_copy = copy.deepcopy(board)
         next_color = 'w' if color == 'b' else 'b'
-        
+
         if move.action_type == "place":
             board_copy.place_stone(move.end_pos, color)
         elif move.action_type == "move":
             board_copy.move_stone(move.start_pos, move.end_pos, color)
-        
+
         return self._simulate(board_copy, next_color, root_color, depth + 1, max_depth)
-    
+
     def _evaluate_position(self, board: GoBoard, player_color: str) -> float:
-        """Heuristically evaluate board position for the given player.
-        Returns value between 0 and 1, where 1 is winning and 0 is losing."""
+        """Evaluate board position. Returns >0.5 if winning, <0.5 if losing."""
         opponent_color = 'w' if player_color == 'b' else 'b'
-        player_score = 0
-        opponent_score = 0
-        
+        player_score = 0.0
+        opponent_score = 0.0
+
         for row in range(board.size):
             for col in range(board.size):
                 pos = Position(row, col)
                 stone = board.get_stone(pos)
-                
+
                 if stone is None:
-                    # Empty intersection - territory
                     neighbors = []
                     for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                         nx, ny = row + dx, col + dy
                         if 0 <= nx < board.size and 0 <= ny < board.size:
-                            neighbor = board.get_stone(Position(nx, ny))
-                            if neighbor:
-                                neighbors.append(neighbor.color)
-                    
+                            n = board.get_stone(Position(nx, ny))
+                            if n:
+                                neighbors.append(n.color)
                     if neighbors:
                         if all(c == player_color for c in neighbors):
                             player_score += 1.0
                         elif all(c == opponent_color for c in neighbors):
                             opponent_score += 1.0
-                
+                        # contested territory counts for neither
+
                 elif stone.color == player_color:
-                    # Our stones
                     player_score += 2.0
-                    # Bonus for liberties if group exists
                     if stone.group:
                         stone.group.calculate_liberties(board)
-                        player_score += len(stone.group.liberties) * 0.5
-                
+                        libs = len(stone.group.liberties)
+                        player_score += min(libs * 0.3, 2.0)  # cap liberty bonus
+                        if libs == 1:
+                            player_score -= 1.5  # penalty for being in atari
+
                 elif stone.color == opponent_color:
-                    # Opponent stones
                     opponent_score += 2.0
                     if stone.group:
                         stone.group.calculate_liberties(board)
-                        opponent_score += len(stone.group.liberties) * 0.5
-        
+                        libs = len(stone.group.liberties)
+                        opponent_score += min(libs * 0.3, 2.0)
+                        if libs == 1:
+                            opponent_score -= 1.5  # opponent in atari is bad for them
+
+        # Return score relative to total — 0.5 is even, closer to 1.0 means winning
         total = player_score + opponent_score
         if total == 0:
             return 0.5
-        
-        # Normalize to [0, 1] where 0.5 is equal
-        return min(1.0, max(0.0, player_score / (total + 1.0)))
+
+        raw = player_score / total
+
+        # Apply komi adjustment for white (6.5 points)
+        if player_color == 'w':
+            komi_adjust = 6.5 / (board.size * board.size)
+            raw = min(1.0, raw + komi_adjust)
+
+        return raw

@@ -72,22 +72,6 @@ class Game:
                 except ValueError:
                     print("Invalid format. Use 'row,col' or 'move row1,col1 to row2,col2'.")
 
-    def should_ai_pass(self, board: GoBoard, color: str, losing_threshold: float = 20.0) -> bool:
-        try:
-            result = compute_game_result(board)
-            
-            if color == 'b':
-                player_score = result.b
-                opponent_score = result.w + result.komi
-            else:
-                player_score = result.w + result.komi
-                opponent_score = result.b
-            
-            # If losing by more than threshold, should pass
-            return (opponent_score - player_score) > losing_threshold
-        except Exception:
-            # If scoring fails for any reason, don't pass
-            return False
 
     def play_game(self, player1, player2, BOARDSIZE=19, ai_agent: TDAgent = None, mcts_agent: MCTSAgent = None, greedy_agent = None):
         board = GoBoard(BOARDSIZE)
@@ -131,11 +115,7 @@ class Game:
                     # AI players - select agent based on agent_type
                     action = None
                     
-                    # Check if AI should pass because they're losing
-                    if self.should_ai_pass(board, current_player.color):
-                        print(f"{current_player.name} is losing significantly, chooses to pass.")
-                        action = MoveAction("pass")
-                    elif current_player.agent_type == "td":
+                    if current_player.agent_type == "td":
                         action = ai_agent.get_learned_move(board, current_player.color, epsilon=0.0)
                     elif current_player.agent_type == "mcts":
                         action = mcts_agent.get_best_move(board, current_player.color)
