@@ -3,6 +3,7 @@ from players import Player, PlayerInfo
 from scoring import compute_game_result
 from agent import MoveAction, RandomAgent, TDAgent, GreedyTerritoryAgent, MCTSAgent
 from collections import namedtuple
+import random
 
 
 class Game:
@@ -44,7 +45,7 @@ class Game:
                     if len(parts) != 2:
                         print("Invalid format. Use: move row1,col1 to row2,col2")
                         continue
-                    
+                     
                     start_parts = parts[0].strip().split(",")
                     end_parts = parts[1].strip().split(",")
                     
@@ -117,14 +118,12 @@ class Game:
                     elif action.action_type == "place":
                         valid_move = board.place_stone(action.end_pos, current_player.color)
                         if valid_move:
-                            prev_move = ("place", action.end_pos)
                             pass_flag = 0
                         else:
                             print("Invalid placement. Try again.")
                     elif action.action_type == "move":
                         valid_move = board.move_stone(action.start_pos, action.end_pos, current_player.color)
                         if valid_move:
-                            prev_move = ("move", action.start_pos, action.end_pos)
                             pass_flag = 0
                         else:
                             print("Invalid move. Piece must be yours, destination empty, and move cardinal (1 step up/down/left/right). Try again.")
@@ -155,7 +154,6 @@ class Game:
                     elif action.action_type == "place":
                         if board.place_stone(action.end_pos, current_player.color):
                             valid_move = True
-                            prev_move = ("place", action.end_pos)
                             pass_flag = 0
                         else:
                             # Invalid move, fallback to pass
@@ -165,7 +163,6 @@ class Game:
                     elif action.action_type == "move":
                         if board.move_stone(action.start_pos, action.end_pos, current_player.color):
                             valid_move = True
-                            prev_move = ("move", action.start_pos, action.end_pos)
                             pass_flag = 0
                         else:
                             # Invalid move, fallback to pass
@@ -213,16 +210,37 @@ def get_game_mode() -> tuple:
             p2 = PlayerInfo(Player.white, name="Player 2 (White)", is_human=True)
             return p1, p2
         elif choice == "2":
-            p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
-            p2 = PlayerInfo(Player.white, name="TD Agent (White)", is_human=False, agent_type="td")
+            # Randomly decide if human goes first
+            if random.choice([True, False]):
+                p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
+                p2 = PlayerInfo(Player.white, name="TD Agent (White)", is_human=False, agent_type="td")
+                print("You go first (Black)")
+            else:
+                p1 = PlayerInfo(Player.black, name="TD Agent (Black)", is_human=False, agent_type="td")
+                p2 = PlayerInfo(Player.white, name="You (White)", is_human=True)
+                print("TD Agent goes first (Black)")
             return p1, p2
         elif choice == "3":
-            p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
-            p2 = PlayerInfo(Player.white, name="MCTS (White)", is_human=False, agent_type="mcts")
+            # Randomly decide if human goes first
+            if random.choice([True, False]):
+                p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
+                p2 = PlayerInfo(Player.white, name="MCTS (White)", is_human=False, agent_type="mcts")
+                print("You go first (Black)")
+            else:
+                p1 = PlayerInfo(Player.black, name="MCTS (Black)", is_human=False, agent_type="mcts")
+                p2 = PlayerInfo(Player.white, name="You (White)", is_human=True)
+                print("MCTS goes first (Black)")
             return p1, p2
         elif choice == "4":
-            p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
-            p2 = PlayerInfo(Player.white, name="Greedy (White)", is_human=False, agent_type="greedy")
+            # Randomly decide if human goes first
+            if random.choice([True, False]):
+                p1 = PlayerInfo(Player.black, name="You (Black)", is_human=True)
+                p2 = PlayerInfo(Player.white, name="Greedy (White)", is_human=False, agent_type="greedy")
+                print("You go first (Black)")
+            else:
+                p1 = PlayerInfo(Player.black, name="Greedy (Black)", is_human=False, agent_type="greedy")
+                p2 = PlayerInfo(Player.white, name="You (White)", is_human=True)
+                print("Greedy goes first (Black)")
             return p1, p2
         elif choice == "5":
             p1 = PlayerInfo(Player.black, name="TD Agent (Black)", is_human=False, agent_type="td")
