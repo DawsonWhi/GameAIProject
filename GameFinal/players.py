@@ -4,7 +4,6 @@ from typing import Optional
 
 
 class Player(enum.Enum):
-    """Color enum preserved for backwards compatibility."""
     black = 1
     white = 2
 
@@ -18,15 +17,6 @@ class Player(enum.Enum):
 
 
 class PlayerInfo:
-    """Represents a player (human or AI) in a game.
-
-    Attributes:
-        color_enum: Player enum value (Player.black or Player.white)
-        color: single-char color used by the board ('b' or 'w')
-        name: display name
-        is_human: whether this player is human-controlled
-        agent_type: type of AI agent ("td", "mcts", "greedy", or None for human)
-    """
 
     def __init__(self, color_enum: Player, name: Optional[str] = None, is_human: bool = True, agent_type: Optional[str] = None):
         self.color_enum = color_enum
